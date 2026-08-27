@@ -5,6 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
+# 프로젝트 루트 경로 설정 (02_audit_rag.py가 루트에 있는 경우 .parent 사용)
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -20,22 +21,33 @@ st.title("실습 2 · Google File Search 감사 RAG")
 st.caption("역할·규정 버전 필터를 서버에서 만들고, file_citation이 없으면 답변을 보류합니다.")
 
 mode = mode_selector()
-store_name = read_secret("FILE_SEARCH_STORE_NAME")
-api_key = read_secret("GEMINI_API_KEY")
-if "rag_store_name" not in st.session_state:
-    st.session_state.rag_store_name = store_name
+
+# Secrets에서 먼저 읽고, 없으면 사이드바 입력창 제공
+secret_api_key = read_secret("GEMINI_API_KEY")
+secret_store_name = read_secret("FILE_SEARCH_STORE_NAME")
 
 with st.sidebar:
+    st.header("🔑 API 설정")
+    if secret_api_key:
+        api_key = secret_api_key
+        st.success("Secrets에서 GEMINI_API_KEY를 불러왔습니다.")
+    else:
+        api_key = st.text_input("GEMINI API Key 입력", type="password", placeholder="AIzaSy...")
+
     st.header("검색 통제")
     role = st.selectbox("로그인 역할", ["auditor", "manager", "public"])
     regulation_version = st.selectbox("적용 규정 버전", ["2026.1", "2025.2"])
+    
+    if "rag_store_name" not in st.session_state:
+        st.session_state.rag_store_name = secret_store_name or ""
+        
     st.code(st.session_state.rag_store_name or "FILE_SEARCH_STORE_NAME 없음")
 
 with st.expander("사규 문서 준비 · Store 생성 및 PDF 색인", expanded=mode == "Google File Search"):
     if mode == "교육용 데모":
         st.info("데모 모드는 sample_data/travel_expense_policy.txt를 사용합니다.")
     elif not api_key:
-        st.error("GEMINI_API_KEY Secret을 먼저 설정하세요.")
+        st.error("사이드바에 GEMINI_API_KEY를 입력해주세요.")
     else:
         c1, c2 = st.columns([1.2, 1])
         with c1:
@@ -45,18 +57,24 @@ with st.expander("사규 문서 준비 · Store 생성 및 PDF 색인", expanded
         with c2:
             display_name = st.text_input("새 Store 표시 이름", value="audit-policy-rag")
             if st.button("새 Store 생성"):
-                st.session_state.rag_store_name = create_store(make_client(api_key), display_name)
-                st.success(f"생성: {st.session_state.rag_store_name}")
+                try:
+                    st.session_state.rag_store_name = create_store(make_client(api_key), display_name)
+                    st.success(f"생성 완료: {st.session_state.rag_store_name}")
+                except Exception as e:
+                    st.error(f"Store 생성 실패: {e}")
+
         policy_file = st.file_uploader("사규 PDF/TXT/MD", type=["pdf", "txt", "md"])
         document_id = st.text_input("document_id", value="POLICY-TRAVEL-2026")
         if st.button("사규 업로드·색인", type="primary", disabled=not (policy_file and st.session_state.rag_store_name)):
             with st.spinner("Google File Search 색인 완료까지 대기 중..."):
-                doc_name = upload_and_wait(
-                    make_client(api_key), st.session_state.rag_store_name, policy_file.name, policy_file.getvalue(),
-                    document_id, role, regulation_version, "2026-01-01",
-                )
-            st.success(f"색인 완료: {doc_name}")
-            st.info("생성한 Store 이름을 Streamlit Cloud의 FILE_SEARCH_STORE_NAME Secret에 등록하세요.")
+                try:
+                    doc_name = upload_and_wait(
+                        make_client(api_key), st.session_state.rag_store_name, policy_file.name, policy_file.getvalue(),
+                        document_id, role, regulation_version, "2026-01-01",
+                    )
+                    st.success(f"색인 완료: {doc_name}")
+                except Exception as e:
+                    st.error(f"업로드/색인 실패: {e}")
 
 question = st.text_area(
     "감사 질문",
@@ -70,8 +88,10 @@ if st.button("근거를 검색하고 답변 생성", type="primary", width="stre
             if mode == "교육용 데모":
                 result = demo_query(question, role, regulation_version, ROOT / "sample_data")
             else:
+                if not api_key:
+                    raise ValueError("GEMINI_API_KEY가 입력되지 않았습니다.")
                 if not st.session_state.rag_store_name:
-                    raise ValueError("FILE_SEARCH_STORE_NAME Secret이 없습니다.")
+                    raise ValueError("Store 이름을 입력하거나 새 Store를 생성해주세요.")
                 result = query(make_client(api_key), st.session_state.rag_store_name, question, role, regulation_version)
         st.session_state.rag_result = result
         st.session_state.rag_event = new_event("AUDIT_RAG_QUERY", question, result.store_name, status=result.status).__dict__
