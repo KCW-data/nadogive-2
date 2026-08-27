@@ -11,7 +11,7 @@ from .models import Citation, SearchResult
 from .security import build_metadata_filter, validate_store_name
 
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
